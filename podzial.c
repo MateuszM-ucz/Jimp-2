@@ -421,6 +421,7 @@ void zapisz_podzial_binarny(const char* nazwa_pliku, Graf* graf, Podzial* podzia
     
     /* linia 1: liczba czesci w podziale (liczba encji w strukturze dodatkowej) */
     fprintf(plik, "%d\n", podzial->liczba_czesci);
+    fflush(plik);
     
     /* linia 2: wierzcholki przypisane do poszczegolnych czesci (wartosci struktury dodatkowej) */
     /* tworzymy liste wierzcholkow dla kazdej czesci */
@@ -459,59 +460,59 @@ void zapisz_podzial_binarny(const char* nazwa_pliku, Graf* graf, Podzial* podzia
     }
     
     /* zapisz dane wierzcholkow do pliku (linia 2) */
+    int pierwsza_wartosc = 1;
     for(int i = 0; i < podzial->liczba_czesci; i++){
         for(int j = 0; j < rozmiary_list[i]; j++){
-            fprintf(plik, "%d", wierzcholki_czesci[i][j]);
-            /* dodaj srednik po kazdej wartosci oprocz ostatniej */
-            if(!(i == podzial->liczba_czesci - 1 && j == rozmiary_list[i] - 1)){
-                fprintf(plik, ";");
+            if(pierwsza_wartosc){
+                fprintf(plik, "%d", wierzcholki_czesci[i][j]);
+                pierwsza_wartosc = 0;
+            } else {
+                fprintf(plik, ";%d", wierzcholki_czesci[i][j]);
             }
         }
     }
     fprintf(plik, "\n");
+    fflush(plik);
     
     /* linia 3: wskazniki wierszy dla struktury czesci (wskazniki wierszy struktury dodatkowej) */
     int wskaznik = 0;
-    for(int i = 0; i <= podzial->liczba_czesci; i++){
-        fprintf(plik, "%d", wskaznik);
-        if(i < podzial->liczba_czesci){
-            fprintf(plik, ";");
-            wskaznik += rozmiary_list[i];
-        }
+    fprintf(plik, "%d", wskaznik); // Pierwszy wskaźnik
+    for(int i = 0; i < podzial->liczba_czesci; i++){
+        wskaznik += rozmiary_list[i];
+        fprintf(plik, ";%d", wskaznik);
     }
     fprintf(plik, "\n");
+    fflush(plik);
     
     /* linia 4: lista sasiedztwa grafu (lista sasiadow glownego grafu) */
     int liczba_elementow_sasiedztwa = graf->wskazniki_listy[graf->liczba_wierzcholkow];
-    for(int i = 0; i < liczba_elementow_sasiedztwa; i++){
-        fprintf(plik, "%d", graf->lista_sasiedztwa[i]);
-        if(i < liczba_elementow_sasiedztwa - 1){
-            fprintf(plik, ";");
+    if(liczba_elementow_sasiedztwa > 0){
+        fprintf(plik, "%d", graf->lista_sasiedztwa[0]); // Pierwszy element
+        for(int i = 1; i < liczba_elementow_sasiedztwa; i++){
+            fprintf(plik, ";%d", graf->lista_sasiedztwa[i]);
         }
     }
     fprintf(plik, "\n");
+    fflush(plik);
     
     /* linia 5: wskazniki wierszy grafu glownego (wskazniki wierszy glownego grafu) */
-    /* w przypadku jednego grafu, zapisujemy tylko oryginalne wskazniki */
-    for(int i = 0; i <= graf->liczba_wierzcholkow; i++){
-        fprintf(plik, "%d", graf->wskazniki_listy[i]);
-        if(i < graf->liczba_wierzcholkow){
-            fprintf(plik, ";");
-        }
+    fprintf(plik, "%d", graf->wskazniki_listy[0]); // Pierwszy wskaźnik
+    for(int i = 1; i <= graf->liczba_wierzcholkow; i++){
+        fprintf(plik, ";%d", graf->wskazniki_listy[i]);
     }
     fprintf(plik, "\n");
+    fflush(plik);
     
-    /* linia 6 i dalej: wskazniki dla grafow czesci (jesli traktujemy kazda czesc jako osobny podgraf) */
-    /* dla kazdej czesci tworzymy osobny graf z wlasnymi wskaznikami */
+    /* linia 6 i dalej: wskazniki i listy sasiedztwa dla grafow czesci */
     for(int p = 0; p < podzial->liczba_czesci; p++){
         /* obliczamy liczbe wierzcholkow w tej czesci */
         int liczba_wierzcholkow_w_czesci = podzial->rozmiary_czesci[p];
+        //printf("Czesc %d: liczba wierzcholkow = %d\n", p, liczba_wierzcholkow_w_czesci);
         
-        /* tworzymy wskazniki dla tej czesci */
-        int* wskazniki_czesci = (int*)malloc((liczba_wierzcholkow_w_czesci + 1) * sizeof(int));
-        if(!wskazniki_czesci){
-            fprintf(stderr, "Blad alokacji pamieci dla wskaznikow czesci %d\n", p);
-            /* zwalnianie zasobow */
+        /* tworzymy mapowanie z globalnych indeksów na lokalne */
+        int* mapa_globalna_na_lokalna = (int*)malloc(graf->liczba_wierzcholkow * sizeof(int));
+        if(!mapa_globalna_na_lokalna){
+            fprintf(stderr, "Blad alokacji pamieci dla mapy indeksow\n");
             for(int i = 0; i < podzial->liczba_czesci; i++){
                 free(wierzcholki_czesci[i]);
             }
@@ -521,39 +522,153 @@ void zapisz_podzial_binarny(const char* nazwa_pliku, Graf* graf, Podzial* podzia
             return;
         }
         
-        /* inicjalizacja wskaznikow */
-        wskazniki_czesci[0] = 0;
+        /* inicjalizacja mapy na wartości -1 (oznacza, że wierzchołek nie należy do tej części) */
+        for(int i = 0; i < graf->liczba_wierzcholkow; i++){
+            mapa_globalna_na_lokalna[i] = -1;
+        }
         
-        /* dla kazdego wierzcholka w tej czesci */
+        /* dla kazdego wierzcholka w tej czesci ustalamy jego lokalny indeks */
         for(int v_idx = 0; v_idx < liczba_wierzcholkow_w_czesci; v_idx++){
-            int wierzcholek = wierzcholki_czesci[p][v_idx];
+            int globalny_indeks = wierzcholki_czesci[p][v_idx];
+            mapa_globalna_na_lokalna[globalny_indeks] = v_idx;
+        }
+        
+        /* Najpierw liczymy ile sąsiadów ma każdy wierzchołek w obrębie tej samej części */
+        int* liczba_sasiadow = (int*)calloc(liczba_wierzcholkow_w_czesci, sizeof(int));
+        if(!liczba_sasiadow){
+            fprintf(stderr, "Blad alokacji pamieci dla liczby sasiadow\n");
+            free(mapa_globalna_na_lokalna);
+            for(int i = 0; i < podzial->liczba_czesci; i++){
+                free(wierzcholki_czesci[i]);
+            }
+            free(wierzcholki_czesci);
+            free(rozmiary_list);
+            fclose(plik);
+            return;
+        }
+        
+        for(int v_idx = 0; v_idx < liczba_wierzcholkow_w_czesci; v_idx++){
+            int globalny_indeks = wierzcholki_czesci[p][v_idx];
             
-            /* obliczamy liczbe sasiadow, ktorzy rowniez naleza do tej samej czesci */
-            int liczba_sasiadow_w_czesci = 0;
-            for(int j = graf->wskazniki_listy[wierzcholek]; j < graf->wskazniki_listy[wierzcholek + 1]; j++){
+            for(int j = graf->wskazniki_listy[globalny_indeks]; j < graf->wskazniki_listy[globalny_indeks + 1]; j++){
                 int sasiad = graf->lista_sasiedztwa[j];
-                if(sasiad >= 0 && sasiad < graf->liczba_wierzcholkow && podzial->przypisania[sasiad] == p){
-                    liczba_sasiadow_w_czesci++;
+                
+                if(sasiad >= 0 && sasiad < graf->liczba_wierzcholkow && 
+                   podzial->przypisania[sasiad] == p){
+                    liczba_sasiadow[v_idx]++;
+                }
+            }
+        }
+        
+        /* Tworzymy wskaźniki wierszy dla podgrafu */
+        int* wskazniki_czesci = (int*)malloc((liczba_wierzcholkow_w_czesci + 1) * sizeof(int));
+        if(!wskazniki_czesci){
+            fprintf(stderr, "Blad alokacji pamieci dla wskaznikow czesci %d\n", p);
+            free(liczba_sasiadow);
+            free(mapa_globalna_na_lokalna);
+            for(int i = 0; i < podzial->liczba_czesci; i++){
+                free(wierzcholki_czesci[i]);
+            }
+            free(wierzcholki_czesci);
+            free(rozmiary_list);
+            fclose(plik);
+            return;
+        }
+        
+        /* Inicjalizujemy wskaźniki wierszy */
+        wskazniki_czesci[0] = 0;
+        for(int i = 0; i < liczba_wierzcholkow_w_czesci; i++){
+            wskazniki_czesci[i + 1] = wskazniki_czesci[i] + liczba_sasiadow[i];
+        }
+        
+        /* Obliczamy sumę wszystkich sąsiadów */
+        int suma_sasiadow = 0;
+        if(liczba_wierzcholkow_w_czesci > 0){
+            suma_sasiadow = wskazniki_czesci[liczba_wierzcholkow_w_czesci];
+        }
+        //printf("Czesc %d: suma sąsiadów = %d\n", p, suma_sasiadow);
+        
+        /* Zapisujemy wskaźniki wierszy dla podgrafu - linia 6+2*p */
+        if(liczba_wierzcholkow_w_czesci > 0){
+            /* Używamy alternatywnego podejścia do formatowania */
+            fprintf(plik, "%d", wskazniki_czesci[0]); // Pierwszy wskaźnik
+            
+            for(int i = 1; i <= liczba_wierzcholkow_w_czesci; i++){
+                fprintf(plik, ";%d", wskazniki_czesci[i]);
+            }
+        } else {
+            /* Dla pustej części zapisujemy tylko 0 */
+            fprintf(plik, "0");
+        }
+        fprintf(plik, "\n");
+        fflush(plik);
+        
+        /* Zapisujemy liste sasiedztwa dla podgrafu - linia 7+2*p */
+        if(suma_sasiadow > 0){
+            /* Tworzymy plaska tablice sasiadow */
+            int* plaska_lista_sasiadow = (int*)malloc(suma_sasiadow * sizeof(int));
+            if(!plaska_lista_sasiadow){
+                fprintf(stderr, "Blad alokacji pamieci dla plaskiej listy sasiadow\n");
+                free(wskazniki_czesci);
+                free(liczba_sasiadow);
+                free(mapa_globalna_na_lokalna);
+                for(int i = 0; i < podzial->liczba_czesci; i++){
+                    free(wierzcholki_czesci[i]);
+                }
+                free(wierzcholki_czesci);
+                free(rozmiary_list);
+                fclose(plik);
+                return;
+            }
+            
+            /* Wypelniamy plaska liste sasiadow */
+            int pozycja = 0;
+            for(int v_idx = 0; v_idx < liczba_wierzcholkow_w_czesci; v_idx++){
+                int globalny_indeks = wierzcholki_czesci[p][v_idx];
+                
+                for(int j = graf->wskazniki_listy[globalny_indeks]; j < graf->wskazniki_listy[globalny_indeks + 1]; j++){
+                    int sasiad = graf->lista_sasiedztwa[j];
+                    
+                    if(sasiad >= 0 && sasiad < graf->liczba_wierzcholkow && 
+                       podzial->przypisania[sasiad] == p){
+                        int lokalny_indeks_sasiada = mapa_globalna_na_lokalna[sasiad];
+                        if(lokalny_indeks_sasiada >= 0 && lokalny_indeks_sasiada < liczba_wierzcholkow_w_czesci && pozycja < suma_sasiadow){
+                            plaska_lista_sasiadow[pozycja++] = lokalny_indeks_sasiada;
+                        }
+                    }
                 }
             }
             
-            /* aktualizujemy wskaznik dla nastepnego wierzcholka */
-            wskazniki_czesci[v_idx + 1] = wskazniki_czesci[v_idx] + liczba_sasiadow_w_czesci;
-        }
-        
-        /* zapisujemy wskazniki dla tej czesci */
-        for(int i = 0; i <= liczba_wierzcholkow_w_czesci; i++){
-            fprintf(plik, "%d", wskazniki_czesci[i]);
-            if(i < liczba_wierzcholkow_w_czesci){
-                fprintf(plik, ";");
+            /* Sprawdzamy czy liczba zapisanych sąsiadow zgadza się z oczekiwaną */
+            if(pozycja != suma_sasiadow){
+                fprintf(stderr, "Ostrzeżenie: Liczba zapisanych sąsiadów (%d) różni się od oczekiwanej (%d)\n", 
+                       pozycja, suma_sasiadow);
+                suma_sasiadow = pozycja; // Używamy faktycznej liczby zapisanych sąsiadów
             }
+            
+            /* Zapisujemy płaską listę sąsiadow używając nowego podejścia */
+            if(suma_sasiadow > 0){
+                fprintf(plik, "%d", plaska_lista_sasiadow[0]); // Pierwszy element
+                
+                for(int i = 1; i < suma_sasiadow; i++){
+                    fprintf(plik, ";%d", plaska_lista_sasiadow[i]);
+                }
+            }
+            
+            free(plaska_lista_sasiadow);
         }
-        fprintf(plik, "\n");
         
+        /* Zawsze kończymy linię, nawet jeśli nie było sąsiadów */
+        fprintf(plik, "\n");
+        fflush(plik);
+        
+        /* Zwalniamy pamięć dla tego podgrafu */
         free(wskazniki_czesci);
+        free(liczba_sasiadow);
+        free(mapa_globalna_na_lokalna);
     }
     
-    /* zwolnij pamiec */
+    /* Zwolnij pamięć */
     for(int i = 0; i < podzial->liczba_czesci; i++){
         free(wierzcholki_czesci[i]);
     }
@@ -564,166 +679,6 @@ void zapisz_podzial_binarny(const char* nazwa_pliku, Graf* graf, Podzial* podzia
     
     printf("Podzial zapisany do %s w formacie CSRRG\n", nazwa_pliku);
 }
-/*
-void zapisz_podzial_binarny(const char* nazwa_pliku, Graf* graf, Podzial* podzial) {
-    if (!nazwa_pliku || !graf || !podzial) {
-        fprintf(stderr, "Nieprawidlowe parametry w zapisz_podzial_binarny\n");
-        return;
-    }
-    
-    FILE* plik = fopen(nazwa_pliku, "w");
-    if (!plik) {
-        fprintf(stderr, "Błąd tworzenia pliku wyjściowego: %s\n", nazwa_pliku);
-        return;
-    }
-    
-    // Linia 1: Liczba części w podziale (liczba encji w strukturze dodatkowej)
-    fprintf(plik, "%d\n", podzial->liczba_czesci);
-    
-    // Linia 2: Wierzchołki przypisane do poszczególnych części (wartości struktury dodatkowej)
-    // Tworzymy listę wierzchołków dla każdej części
-    int** wierzcholki_czesci = (int**)malloc(podzial->liczba_czesci * sizeof(int*));
-    int* rozmiary_list = (int*)calloc(podzial->liczba_czesci, sizeof(int));
-    
-    if (!wierzcholki_czesci || !rozmiary_list) {
-        fprintf(stderr, "Błąd alokacji pamięci w zapisz_podzial_binarny\n");
-        if (wierzcholki_czesci) free(wierzcholki_czesci);
-        if (rozmiary_list) free(rozmiary_list);
-        fclose(plik);
-        return;
-    }
-    
-    // Inicjalizacja tablic
-    for (int i = 0; i < podzial->liczba_czesci; i++) {
-        wierzcholki_czesci[i] = (int*)malloc(podzial->rozmiary_czesci[i] * sizeof(int));
-        if (!wierzcholki_czesci[i]) {
-            fprintf(stderr, "Błąd alokacji pamięci dla listy wierzchołków części %d\n", i);
-            for (int j = 0; j < i; j++) {
-                free(wierzcholki_czesci[j]);
-            }
-            free(wierzcholki_czesci);
-            free(rozmiary_list);
-            fclose(plik);
-            return;
-        }
-    }
-    
-    // Przydziel wierzcholki do odpowiednich list
-    for (int v = 0; v < graf->liczba_wierzcholkow; v++) {
-        int czesc = podzial->przypisania[v];
-        if (czesc >= 0 && czesc < podzial->liczba_czesci) {
-            wierzcholki_czesci[czesc][rozmiary_list[czesc]++] = v;
-        }
-    }
-    
-    // Zapisz dane wierzchołków do pliku (Linia 2)
-    for (int i = 0; i < podzial->liczba_czesci; i++) {
-        for (int j = 0; j < rozmiary_list[i]; j++) {
-            fprintf(plik, "%d", wierzcholki_czesci[i][j]);
-            // Dodaj średnik po każdej wartości oprócz ostatniej
-            if (!(i == podzial->liczba_czesci - 1 && j == rozmiary_list[i] - 1)) {
-                fprintf(plik, ";");
-            }
-        }
-    }
-    fprintf(plik, "\n");
-    
-    // Linia 3: Wskaźniki wierszy dla struktury części (wskaźniki wierszy struktury dodatkowej)
-    int wskaznik = 0;
-    for (int i = 0; i <= podzial->liczba_czesci; i++) {
-        fprintf(plik, "%d", wskaznik);
-        if (i < podzial->liczba_czesci) {
-            fprintf(plik, ";");
-            wskaznik += rozmiary_list[i];
-        }
-    }
-    fprintf(plik, "\n");
-    
-    // Linia 4: Lista sąsiedztwa grafu (lista sąsiadów głównego grafu)
-    int liczba_elementow_sasiedztwa = graf->wskazniki_listy[graf->liczba_wierzcholkow];
-    for (int i = 0; i < liczba_elementow_sasiedztwa; i++) {
-        fprintf(plik, "%d", graf->lista_sasiedztwa[i]);
-        if (i < liczba_elementow_sasiedztwa - 1) {
-            fprintf(plik, ";");
-        }
-    }
-    fprintf(plik, "\n");
-    
-    // Linia 5: Wskaźniki wierszy grafu głównego (wskaźniki wierszy głównego grafu)
-    // W przypadku jednego grafu, zapisujemy tylko oryginalne wskaźniki
-    for (int i = 0; i <= graf->liczba_wierzcholkow; i++) {
-        fprintf(plik, "%d", graf->wskazniki_listy[i]);
-        if (i < graf->liczba_wierzcholkow) {
-            fprintf(plik, ";");
-        }
-    }
-    fprintf(plik, "\n");
-    
-    // Linia 6 i dalej: Wskaźniki dla grafów części (jeśli traktujemy każdą część jako osobny podgraf)
-    // Dla każdej części tworzymy osobny graf z własnymi wskaźnikami
-    for (int p = 0; p < podzial->liczba_czesci; p++) {
-        // Obliczamy liczbę wierzchołków w tej części
-        int liczba_wierzcholkow_w_czesci = podzial->rozmiary_czesci[p];
-        
-        // Tworzymy wskaźniki dla tej części
-        int* wskazniki_czesci = (int*)malloc((liczba_wierzcholkow_w_czesci + 1) * sizeof(int));
-        if (!wskazniki_czesci) {
-            fprintf(stderr, "Błąd alokacji pamięci dla wskaźników części %d\n", p);
-            // Zwalnianie zasobów
-            for (int i = 0; i < podzial->liczba_czesci; i++) {
-                free(wierzcholki_czesci[i]);
-            }
-            free(wierzcholki_czesci);
-            free(rozmiary_list);
-            fclose(plik);
-            return;
-        }
-        
-        // Inicjalizacja wskazikow
-        wskazniki_czesci[0] = 0;
-        
-        // Dla każdego wierzchołka w tej części
-        for (int v_idx = 0; v_idx < liczba_wierzcholkow_w_czesci; v_idx++) {
-            int wierzcholek = wierzcholki_czesci[p][v_idx];
-            
-            // Obliczamy liczbę sąsiadów, którzy również należą do tej samej części
-            int liczba_sasiadow_w_czesci = 0;
-            for (int j = graf->wskazniki_listy[wierzcholek]; j < graf->wskazniki_listy[wierzcholek + 1]; j++) {
-                int sasiad = graf->lista_sasiedztwa[j];
-                if (sasiad >= 0 && sasiad < graf->liczba_wierzcholkow && podzial->przypisania[sasiad] == p) {
-                    liczba_sasiadow_w_czesci++;
-                }
-            }
-            
-            // Aktualizujemy wskaźnik dla następnego wierzchołka
-            wskazniki_czesci[v_idx + 1] = wskazniki_czesci[v_idx] + liczba_sasiadow_w_czesci;
-        }
-        
-        // Zapisujemy wskaźniki dla tej części
-        for (int i = 0; i <= liczba_wierzcholkow_w_czesci; i++) {
-            fprintf(plik, "%d", wskazniki_czesci[i]);
-            if (i < liczba_wierzcholkow_w_czesci) {
-                fprintf(plik, ";");
-            }
-        }
-        fprintf(plik, "\n");
-        
-        free(wskazniki_czesci);
-    }
-    
-    // Zwolnij pamiec
-    for (int i = 0; i < podzial->liczba_czesci; i++) {
-        free(wierzcholki_czesci[i]);
-    }
-    free(wierzcholki_czesci);
-    free(rozmiary_list);
-    
-    fclose(plik);
-    
-    printf("Podzial zapisany do %s w formacie CSRRG\n", nazwa_pliku);
-}
-*/
-
 /* zwolnij pamiec uzywana przez podzial */
 void zwolnij_podzial(Podzial* podzial){
     if(podzial){
